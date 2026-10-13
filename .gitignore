@@ -1,0 +1,30 @@
+# secrets
+.env
+*.json.key
+gcp-key*.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# data written locally by the stream
+data/
+checkpoints/
+*.parquet
+
+# dbt
+dbt/target/
+dbt/logs/
+dbt/dbt_packages/
+
+# terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# misc
+.DS_Store
+logs/
