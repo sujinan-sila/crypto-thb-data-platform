@@ -38,7 +38,21 @@ Checked before starting, so the pipeline is not built on a source that returns p
 |---|---|---|---|
 | Binance WebSocket `data-stream.binance.vision` | Every trade, real time | Public, no key | 96 BTCUSDT trades in 10 seconds |
 | Binance REST `exchangeInfo`, `klines` | Symbol status and rules, official 1-minute candles | Public, no key | |
-| Bank of Thailand `gateway.api.bot.or.th` | Daily USD/THB rate, financial institution holidays | Free key from [portal.api.bot.or.th](https://portal.api.bot.or.th/), `Authorization` header | Endpoint answers 401 without a key, as expected |
+| Bank of Thailand `Stat-ReferenceRate/v2/DAILY_REF_RATE/` | Daily weighted-average interbank USD/THB rate | Free token from [portal.api.bot.or.th](https://portal.api.bot.or.th/), `Authorization` header | `data_detail[{period, rate}]`, business days only: 1–9 Oct 2026 returned 7 rates (33.558–33.662), weekends absent |
+| Bank of Thailand `financial-institutions-holidays/?year=` | Thai bank holidays | Same portal, separate token | 19 holidays for 2026 under `result.data`, including 16 Oct, a Bangkok-only special holiday announced mid-year |
+
+Two things the checks changed in the design:
+
+- The FX rate exists only on business days, so Gold carries the last published rate forward over weekends and holidays (for example 13 Oct 2026).
+- Holidays can be added during the year, so the holiday list is fetched again instead of loaded once.
+
+## Account constraints
+
+Built on an Azure for Students subscription, which limits what can be created:
+
+- Region `eastasia`: the allowed regions are East Asia, Central India, Korea Central, Malaysia West and Indonesia Central, and Azure Databricks does not run in the last two.
+- 6 vCPUs per region, and only older VM families have quota (`Standard_DS3_v2`), so Databricks runs one 4-core single-node cluster at a time.
+- Credit ends on 17 Dec 2026; everything is created with Terraform so it can be destroyed and rebuilt.
 
 ## Planned data model (Gold)
 
