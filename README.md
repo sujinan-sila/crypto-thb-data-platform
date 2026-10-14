@@ -1,6 +1,6 @@
-# Crypto Market Data Platform (in THB)
+# Crypto Market Lakehouse (in THB) on Azure Databricks
 
-Streaming and batch pipeline for crypto market data, priced in Thai baht. Live trades from Binance flow through Kafka and Spark Structured Streaming into 1-minute candles; daily batch jobs bring in reference data and the Bank of Thailand USD/THB rate; dbt models it all into a star schema in BigQuery.
+Streaming and batch lakehouse for crypto market data, priced in Thai baht. Live trades from Binance go through Kafka (the Azure Event Hubs Kafka endpoint) into Databricks Structured Streaming and become 1-minute candles. Daily jobs in Azure Data Factory bring in the Bank of Thailand USD/THB rate and bank holidays, plus Binance reference data and official candles. Everything lands in a Bronze/Silver/Gold Delta lakehouse governed by Unity Catalog; dbt builds the Gold star schema, Airflow with Cosmos orchestrates the whole flow, and Power BI reads the result.
 
 > **Status: planning.** Data sources are checked and the design is below. Nothing is built yet; see [Progress](#progress).
 
@@ -8,32 +8,31 @@ Streaming and batch pipeline for crypto market data, priced in Thai baht. Live t
 
 ```mermaid
 flowchart LR
-    subgraph STREAM["Streaming (local Docker)"]
-        WS["Binance WebSocket<br/>trades"] --> PR["Python producer"]
-        PR --> K[["Kafka<br/>topic: trades<br/>partitioned by symbol"]]
-        K --> SS["Spark Structured Streaming<br/>dedup · watermark · 1-min OHLCV"]
+    WS["Binance WebSocket<br/>trades"] --> PR["Python producer"]
+    PR --> EH[["Event Hubs<br/>Kafka endpoint"]]
+    EH -->|Structured Streaming| B
+    API["Bank of Thailand API<br/>Binance REST"] --> ADF["Azure Data Factory"]
+    ADF --> LZ[("ADLS Gen2<br/>landing")]
+    LZ -->|Auto Loader| B
+    subgraph DBX["Azure Databricks · Unity Catalog"]
+        B["Bronze"] --> S["Silver<br/>1-min candles, parsed reference data"]
+        S -->|dbt| G["Gold<br/>star schema, THB marts"]
     end
-    subgraph BATCH["Batch (Airflow, daily)"]
-        FX["Bank of Thailand<br/>USD/THB rate"]
-        EI["Binance exchangeInfo<br/>symbol metadata"]
-        KL["Binance klines<br/>official candles"]
-        HOL["Bank of Thailand<br/>bank holidays"]
-    end
-    SS --> RAW[("BigQuery raw")]
-    FX --> RAW
-    EI --> RAW
-    KL --> RAW
-    HOL --> RAW
-    RAW --> DBT["dbt<br/>staging → marts"]
-    DBT --> MART[("BigQuery marts<br/>star schema")]
-    MART --> DASH["Looker Studio"]
+    G --> PBI["Power BI"]
+    AF["Airflow + Cosmos"] -.-> ADF
+    AF -.-> DBX
 ```
 
-Infrastructure on GCP is created with Terraform. Every pull request runs SQL lint, unit tests and `dbt build` in GitHub Actions.
+- **Streaming:** producer → Event Hubs → Bronze (raw messages) → Silver (deduplicated, event-time 1-minute candles with a watermark). Runs as scheduled `availableNow` jobs instead of an always-on cluster.
+- **Batch:** parameterized ADF pipelines copy API responses as-is into ADLS; Auto Loader picks up only new files.
+- **Gold (dbt):** SCD Type 2 symbol dimension, incremental candle fact, date dimension with Thai bank holidays, USD/THB rate forward-filled over holidays, daily THB marts, volatility, and stream-vs-exchange reconciliation.
+- **Orchestration:** Airflow runs ADF and Databricks jobs; dbt runs through Cosmos when the batch data has landed (Airflow Assets).
+- **Governance:** Unity Catalog grants per layer, lineage, tags; secrets in Key Vault and Databricks secret scopes; managed identities instead of storage keys.
+- **Infrastructure and delivery:** Terraform for all Azure resources; GitHub Actions runs tests and `dbt build` on every pull request and deploys Databricks Asset Bundles from `main`.
 
 ## Data sources
 
-All checked before starting, so the pipeline is not built on a source that returns placeholder data.
+Checked before starting, so the pipeline is not built on a source that returns placeholder data.
 
 | Source | What | Access | Checked |
 |---|---|---|---|
@@ -41,43 +40,36 @@ All checked before starting, so the pipeline is not built on a source that retur
 | Binance REST `exchangeInfo`, `klines` | Symbol status and rules, official 1-minute candles | Public, no key | |
 | Bank of Thailand `gateway.api.bot.or.th` | Daily USD/THB rate, financial institution holidays | Free key from [portal.api.bot.or.th](https://portal.api.bot.or.th/), `Authorization` header | Endpoint answers 401 without a key, as expected |
 
-## Planned data model
+## Planned data model (Gold)
 
 ```
                  dim_symbol (SCD Type 2)
                  status, tick size, base/quote asset
                           │
-dim_date ─────── fct_candles_1m ─────── dim_time
-(Thai bank        symbol, minute,        (minute of day,
- holidays)        open/high/low/close,    trading session)
-                  volume, trade count
-                          │
-                 fct_fx_daily (USD/THB)
+dim_date ─────── fct_candles_1m ─────── fct_fx_daily
+(Thai bank        symbol, minute,        USD/THB, forward-filled
+ holidays)        OHLC, volume, trades   over weekends and holidays
 ```
-
-- `fct_candles_1m` is incremental and merges on `(symbol, minute)`, so replaying the stream does not duplicate rows.
-- `dim_symbol` is a dbt snapshot of `exchangeInfo`. Symbols really do change: trading halts, tick size changes, delistings.
-- Marts on top: daily OHLCV in baht, rolling volatility, VWAP, daily ranking by volume.
 
 ## Data quality plan
 
-- **Stream vs exchange reconciliation.** Compare every candle built from the stream with Binance's official candle for the same minute, and explain the minutes that differ (disconnects, events later than the watermark, duplicates).
-- Gaps: minutes with no candle for a symbol that was trading.
-- Freshness: alert when the latest candle or FX rate is older than expected.
-- dbt tests on every layer: unique keys, not null, relationships, value ranges.
-- Kafka consumer lag.
+- **Stream vs exchange reconciliation:** compare every candle built from the stream with Binance's official candle for the same minute, and explain the minutes that differ (disconnects, late events past the watermark, duplicates).
+- Freshness checks on the stream and the FX rate; dbt tests on every layer.
+- Failure experiments: pause Databricks for a day (expected: nothing lost, Event Hubs retains 3 days) and stop the producer for a few minutes (expected: a gap the checks catch).
 
 ## Progress
 
-- [ ] Kafka in Docker, producer from the Binance WebSocket
-- [ ] Spark Structured Streaming: dedup, watermark, 1-minute candles to BigQuery
-- [ ] Airflow batch: FX rate, holidays, exchangeInfo, klines
-- [ ] dbt: staging, star schema, snapshot, tests
-- [ ] Stream vs exchange reconciliation
-- [ ] Terraform for GCP
-- [ ] GitHub Actions CI
-- [ ] Dashboard
+- [ ] Terraform: ADLS Gen2, Event Hubs, Key Vault, Data Factory, Databricks
+- [ ] Producer: local Kafka, then Event Hubs
+- [ ] Unity Catalog: medallion schemas, external locations
+- [ ] Streaming: Bronze and Silver candles
+- [ ] ADF ingestion and Auto Loader
+- [ ] dbt Gold: star schema, SCD2, tests
+- [ ] Reconciliation, governance, cost measurements
+- [ ] Airflow + Cosmos orchestration
+- [ ] CI/CD with GitHub Actions and Asset Bundles
+- [ ] Power BI report
 
 ## Stack
 
-Kafka · Spark Structured Streaming · Python · Apache Airflow · dbt · BigQuery · Terraform · GitHub Actions · Docker · Looker Studio
+Azure (ADLS Gen2, Event Hubs, Data Factory, Key Vault) · Azure Databricks (Spark Structured Streaming, Delta Lake, Auto Loader, Unity Catalog, Asset Bundles) · Apache Kafka protocol · dbt · Apache Airflow + Cosmos · Terraform · GitHub Actions · Power BI · Python · SQL
