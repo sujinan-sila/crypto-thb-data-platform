@@ -28,3 +28,7 @@ dbt/dbt_packages/
 # misc
 .DS_Store
 logs/
+
+# terraform saved plans
+tfplan
+*.tfplan
