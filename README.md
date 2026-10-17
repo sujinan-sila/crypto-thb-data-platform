@@ -39,7 +39,7 @@ Checked before starting, so the pipeline is not built on a source that returns p
 | Binance WebSocket `data-stream.binance.vision` | Every trade, real time | Public, no key | 96 BTCUSDT trades in 10 seconds |
 | Binance REST `exchangeInfo`, `klines` | Symbol status and rules, official 1-minute candles | Public, no key | |
 | Bank of Thailand `Stat-ReferenceRate/v2/DAILY_REF_RATE/` | Daily weighted-average interbank USD/THB rate | Free token from [portal.api.bot.or.th](https://portal.api.bot.or.th/), `Authorization` header | `data_detail[{period, rate}]`, business days only: 1–9 Oct 2026 returned 7 rates (33.558–33.662), weekends absent |
-| Bank of Thailand `financial-institutions-holidays/?year=` | Thai bank holidays | Same portal, separate token | 19 holidays for 2026 under `result.data`, including 16 Oct, a Bangkok-only special holiday announced mid-year |
+| Bank of Thailand `financial-institutions-holidays/?year=` | Thai bank holidays | Same portal, separate token | 20 holidays for 2026 under `result.data`, including 16 Oct, a Bangkok-only special holiday announced mid-year |
 
 Two things the checks changed in the design:
 
@@ -51,7 +51,8 @@ Two things the checks changed in the design:
 Built on an Azure for Students subscription, which limits what can be created:
 
 - Region `eastasia`: the allowed regions are East Asia, Central India, Korea Central, Malaysia West and Indonesia Central, and Azure Databricks does not run in the last two.
-- 6 vCPUs per region, and only older VM families have quota (`Standard_DS3_v2`), so Databricks runs one 4-core single-node cluster at a time.
+- 6 vCPUs per region, and only older VM families have quota (4 vCPUs each for DSv2, DSv3, Dv3 and DDSv4; v5 requests are refused), so Databricks runs one 4-core single-node cluster at a time (`Standard_D4ds_v4`). The dev cluster has to be stopped before a job cluster can start.
+- The Databricks `trial` SKU is refused on this subscription type, so the workspace is `premium` (also needed for Unity Catalog) and DBUs are paid from credit from the first hour.
 - Credit ends on 17 Dec 2026; everything is created with Terraform so it can be destroyed and rebuilt.
 
 ## Planned data model (Gold)
