@@ -2,7 +2,7 @@
 
 Streaming and batch lakehouse for crypto market data, priced in Thai baht. Live trades from Binance go through Kafka (the Azure Event Hubs Kafka endpoint) into Databricks Structured Streaming and become 1-minute candles. Daily jobs in Azure Data Factory bring in the Bank of Thailand USD/THB rate and bank holidays, plus Binance reference data and official candles. Everything lands in a Bronze/Silver/Gold Delta lakehouse governed by Unity Catalog; dbt builds the Gold star schema, Airflow with Cosmos orchestrates the whole flow, and Power BI reads the result.
 
-> **Status: planning.** Data sources are checked and the design is below. Nothing is built yet; see [Progress](#progress).
+> **Status: in progress.** Infrastructure, streaming (Bronze and Silver) and batch ingestion into Bronze are running. dbt Gold, orchestration, CI/CD and Power BI are next; see [Progress](#progress).
 
 ## Architecture
 
@@ -55,6 +55,39 @@ Built on an Azure for Students subscription, which limits what can be created:
 - The Databricks `trial` SKU is refused on this subscription type, so the workspace is `premium` (also needed for Unity Catalog) and DBUs are paid from credit from the first hour.
 - Credit ends on 17 Dec 2026; everything is created with Terraform so it can be destroyed and rebuilt.
 
+## What's built so far
+
+### Infrastructure (`terraform/`)
+
+Resource group in `eastasia` with ADLS Gen2 (`landing` and `lakehouse` containers), Event Hubs Standard (topic `trades`, 3 partitions, 3-day retention, separate send and listen rules), Key Vault with RBAC, Data Factory and Databricks with managed identities. No storage keys anywhere: Data Factory and the Databricks access connector get Storage Blob Data Contributor, and Data Factory reads the Bank of Thailand tokens from Key Vault. Event Hubs and Databricks sit behind `create_eventhubs` / `create_databricks` flags so they only cost money while they are needed.
+
+### Producer (`producer/`, `docker-compose.yml`)
+
+Python producer on the Binance combined trade stream for BTC, ETH, SOL, BNB and XRP, keyed by symbol, with reconnect and backoff. It was built against a local single-node Kafka (KRaft, with kafka-ui) first; setting `EH_CONNECTION_STRING` switches the same code to Event Hubs over SASL_SSL.
+
+- 4.5k–7.6k trades per minute.
+- Partition 0 is hot: with librdkafka's key hashing, BTCUSDT and ETHUSDT both land there. Java clients hash differently, so the same keys spread another way.
+- Binance trade time to Event Hubs: **median 141 ms, p99 364 ms, max 1.5 s**. A few values were negative because the local PC clock runs about 30–50 ms behind Binance.
+
+### Streaming (`databricks/src/bronze_trades.py`, `silver_candles.py`)
+
+A Databricks Asset Bundle job (`stream_bronze_silver`) on a single-node job cluster, run with `availableNow` instead of an always-on cluster:
+
+- **Bronze** `crypto.bronze.trades`: raw Kafka payload plus partition, offset and enqueue time. The checkpoint makes reruns pick up only new offsets; the first run loaded 177,314 trades (81 minutes) and a rerun added only the 2,338 that arrived in between.
+- **Silver** `crypto.silver.candles_1m`: parsed trades, deduplicated on `(symbol, trade_id)` within a 30-second watermark, grouped into event-time 1-minute OHLC candles. Open and close come from min/max of `(trade_time, trade_id, price)`, so ties in the same millisecond still pick one trade. The newest minute stays open until the watermark passes it, so it is written on the next run.
+- Binance messages have both `t` (trade id) and `T` (trade time), so the parser turns on `spark.sql.caseSensitive`.
+
+### Batch ingestion (`adf/`, `databricks/src/landing_to_bronze.py`)
+
+Data Factory copies API responses into `landing/<source>/ds=YYYY-MM-DD/` unchanged:
+
+- `pl_ingest_daily(day, symbols)`: USD/THB with a 7-day lookback (so holidays and late publication are covered), Binance `exchangeInfo`, and official 1-minute klines for every symbol (two pages per day, 1000 + 440 candles).
+- `pl_ingest_holidays(year)`: the Thai bank holiday list.
+
+Auto Loader (`landing_to_bronze` job) loads each new file as one row (`payload`, `source_file`, `ds`) into `crypto.bronze.fx_usd_thb`, `th_bank_holidays`, `exchange_info` and `klines_1m`. A rerun adds 0 files because the checkpoint remembers file names. It uses directory listing: file events need a storage queue, which failed with 403 on this subscription, and listing is cheap for a folder this small.
+
+Data Factory isn't Git-linked, so the JSON in `adf/` is exported from the published factory.
+
 ## Planned data model (Gold)
 
 ```
@@ -74,11 +107,11 @@ dim_date ─────── fct_candles_1m ─────── fct_fx_daily
 
 ## Progress
 
-- [ ] Terraform: ADLS Gen2, Event Hubs, Key Vault, Data Factory, Databricks
-- [ ] Producer: local Kafka, then Event Hubs
-- [ ] Unity Catalog: medallion schemas, external locations
-- [ ] Streaming: Bronze and Silver candles
-- [ ] ADF ingestion and Auto Loader
+- [x] Terraform: ADLS Gen2, Event Hubs, Key Vault, Data Factory, Databricks
+- [x] Producer: local Kafka, then Event Hubs
+- [x] Unity Catalog: medallion schemas, external locations
+- [x] Streaming: Bronze and Silver candles
+- [x] ADF ingestion and Auto Loader
 - [ ] dbt Gold: star schema, SCD2, tests
 - [ ] Reconciliation, governance, cost measurements
 - [ ] Airflow + Cosmos orchestration
