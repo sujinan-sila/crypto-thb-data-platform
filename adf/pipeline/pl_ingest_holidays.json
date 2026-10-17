@@ -1,0 +1,65 @@
+{
+    "name": "pl_ingest_holidays",
+    "properties": {
+        "activities": [
+            {
+                "name": "cp_holidays",
+                "type": "Copy",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "BinarySource",
+                        "storeSettings": {
+                            "type": "HttpReadSettings",
+                            "requestMethod": "GET"
+                        },
+                        "formatSettings": {
+                            "type": "BinaryReadSettings"
+                        }
+                    },
+                    "sink": {
+                        "type": "BinarySink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                },
+                "inputs": [
+                    {
+                        "referenceName": "ds_http_bot_holidays",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "relativeUrl": "@concat('financial-institutions-holidays/?year=', pipeline().parameters.year)"
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "ds_landing_file",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "folder": "@concat('th_bank_holidays/ds=', utcNow('yyyy-MM-dd'))",
+                            "fileName": "@concat('holidays_', pipeline().parameters.year, '.json')"
+                        }
+                    }
+                ]
+            }
+        ],
+        "parameters": {
+            "year": {
+                "type": "string",
+                "defaultValue": "2026"
+            }
+        },
+        "annotations": []
+    }
+}

@@ -1,0 +1,27 @@
+{
+    "name": "ds_landing_file",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "ls_adls",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "folder": {
+                "type": "string"
+            },
+            "fileName": {
+                "type": "string"
+            }
+        },
+        "annotations": [],
+        "type": "Binary",
+        "typeProperties": {
+            "location": {
+                "type": "AzureBlobFSLocation",
+                "fileName": "@dataset().fileName",
+                "folderPath": "@dataset().folder",
+                "fileSystem": "landing"
+            }
+        }
+    }
+}

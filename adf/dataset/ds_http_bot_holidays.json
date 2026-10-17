@@ -1,0 +1,25 @@
+{
+    "name": "ds_http_bot_holidays",
+    "properties": {
+        "linkedServiceName": {
+            "referenceName": "ls_bot_holidays",
+            "type": "LinkedServiceReference"
+        },
+        "parameters": {
+            "relativeUrl": {
+                "type": "string"
+            }
+        },
+        "annotations": [],
+        "type": "Binary",
+        "typeProperties": {
+            "location": {
+                "type": "HttpServerLocation",
+                "relativeUrl": {
+                    "value": "@dataset().relativeUrl",
+                    "type": "Expression"
+                }
+            }
+        }
+    }
+}

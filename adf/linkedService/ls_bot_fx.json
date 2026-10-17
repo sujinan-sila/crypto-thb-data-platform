@@ -1,0 +1,22 @@
+{
+    "name": "ls_bot_fx",
+    "properties": {
+        "annotations": [],
+        "type": "HttpServer",
+        "typeProperties": {
+            "url": "https://gateway.api.bot.or.th/",
+            "enableServerCertificateValidation": true,
+            "authenticationType": "Anonymous",
+            "authHeaders": {
+                "Authorization": {
+                    "type": "AzureKeyVaultSecret",
+                    "store": {
+                        "referenceName": "ls_keyvault",
+                        "type": "LinkedServiceReference"
+                    },
+                    "secretName": "bot-token-fx"
+                }
+            }
+        }
+    }
+}

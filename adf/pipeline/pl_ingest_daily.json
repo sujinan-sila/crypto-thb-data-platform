@@ -1,0 +1,290 @@
+{
+    "name": "pl_ingest_daily",
+    "properties": {
+        "activities": [
+            {
+                "name": "cp_fx",
+                "type": "Copy",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "BinarySource",
+                        "storeSettings": {
+                            "type": "HttpReadSettings",
+                            "requestMethod": "GET"
+                        },
+                        "formatSettings": {
+                            "type": "BinaryReadSettings"
+                        }
+                    },
+                    "sink": {
+                        "type": "BinarySink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                },
+                "inputs": [
+                    {
+                        "referenceName": "ds_http_bot_fx",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "relativeUrl": {
+                                "value": "@concat('Stat-ReferenceRate/v2/DAILY_REF_RATE/?start_period=', formatDateTime(addDays(pipeline().parameters.day, -6), 'yyyy-MM-dd'), '&end_period=', pipeline().parameters.day)",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "ds_landing_file",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "folder": {
+                                "value": "@concat('fx_usd_thb/ds=', pipeline().parameters.day)",
+                                "type": "Expression"
+                            },
+                            "fileName": "fx.json"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "cp_exchange_info",
+                "type": "Copy",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "source": {
+                        "type": "BinarySource",
+                        "storeSettings": {
+                            "type": "HttpReadSettings",
+                            "requestMethod": "GET"
+                        },
+                        "formatSettings": {
+                            "type": "BinaryReadSettings"
+                        }
+                    },
+                    "sink": {
+                        "type": "BinarySink",
+                        "storeSettings": {
+                            "type": "AzureBlobFSWriteSettings"
+                        }
+                    },
+                    "enableStaging": false
+                },
+                "inputs": [
+                    {
+                        "referenceName": "ds_http_binance",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "relativeUrl": {
+                                "value": "@concat('api/v3/exchangeInfo?symbols=', encodeUriComponent(string(pipeline().parameters.symbols)))",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ],
+                "outputs": [
+                    {
+                        "referenceName": "ds_landing_file",
+                        "type": "DatasetReference",
+                        "parameters": {
+                            "folder": "@concat('exchange_info/ds=', pipeline().parameters.day)",
+                            "fileName": "exchange_info.json"
+                        }
+                    }
+                ]
+            },
+            {
+                "name": "set_day_start",
+                "type": "SetVariable",
+                "dependsOn": [],
+                "policy": {
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "userProperties": [],
+                "typeProperties": {
+                    "variableName": "dayStartMs",
+                    "value": {
+                        "value": "@string(div(sub(ticks(concat(pipeline().parameters.day, 'T00:00:00Z')), ticks('1970-01-01T00:00:00Z')), 10000))",
+                        "type": "Expression"
+                    }
+                }
+            },
+            {
+                "name": "fe_klines",
+                "type": "ForEach",
+                "dependsOn": [
+                    {
+                        "activity": "set_day_start",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "userProperties": [],
+                "typeProperties": {
+                    "items": {
+                        "value": "@pipeline().parameters.symbols",
+                        "type": "Expression"
+                    },
+                    "isSequential": true,
+                    "activities": [
+                        {
+                            "name": "cp_klines_p1",
+                            "type": "Copy",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "BinarySource",
+                                    "storeSettings": {
+                                        "type": "HttpReadSettings",
+                                        "requestMethod": "GET"
+                                    },
+                                    "formatSettings": {
+                                        "type": "BinaryReadSettings"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "BinarySink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "ds_http_binance",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "relativeUrl": {
+                                            "value": "@concat('api/v3/klines?symbol=', item(), '&interval=1m&limit=1000&startTime=', variables('dayStartMs'), '&endTime=', string(add(int(variables('dayStartMs')), 86399999)))",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "ds_landing_file",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "folder": "@concat('klines_1m/ds=', pipeline().parameters.day)",
+                                        "fileName": "@concat(item(), '_p1.json')"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "name": "cp_klines_p2",
+                            "type": "Copy",
+                            "dependsOn": [],
+                            "policy": {
+                                "timeout": "0.12:00:00",
+                                "retry": 0,
+                                "retryIntervalInSeconds": 30,
+                                "secureOutput": false,
+                                "secureInput": false
+                            },
+                            "userProperties": [],
+                            "typeProperties": {
+                                "source": {
+                                    "type": "BinarySource",
+                                    "storeSettings": {
+                                        "type": "HttpReadSettings",
+                                        "requestMethod": "GET"
+                                    },
+                                    "formatSettings": {
+                                        "type": "BinaryReadSettings"
+                                    }
+                                },
+                                "sink": {
+                                    "type": "BinarySink",
+                                    "storeSettings": {
+                                        "type": "AzureBlobFSWriteSettings"
+                                    }
+                                },
+                                "enableStaging": false
+                            },
+                            "inputs": [
+                                {
+                                    "referenceName": "ds_http_binance",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "relativeUrl": {
+                                            "value": "@concat('api/v3/klines?symbol=', item(), '&interval=1m&limit=1000&startTime=', string(add(int(variables('dayStartMs')), 60000000)), '&endTime=', string(add(int(variables('dayStartMs')), 86399999)))",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ],
+                            "outputs": [
+                                {
+                                    "referenceName": "ds_landing_file",
+                                    "type": "DatasetReference",
+                                    "parameters": {
+                                        "folder": "@concat('klines_1m/ds=', pipeline().parameters.day)",
+                                        "fileName": {
+                                            "value": "@concat(item(), '_p2.json')",
+                                            "type": "Expression"
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        ],
+        "parameters": {
+            "day": {
+                "type": "string",
+                "defaultValue": "2026-10-16"
+            },
+            "symbols": {
+                "type": "array",
+                "defaultValue": [
+                    "BTCUSDT",
+                    "ETHUSDT",
+                    "SOLUSDT",
+                    "BNBUSDT",
+                    "XRPUSDT"
+                ]
+            }
+        },
+        "variables": {
+            "dayStartMs": {
+                "type": "String"
+            }
+        },
+        "annotations": []
+    }
+}
