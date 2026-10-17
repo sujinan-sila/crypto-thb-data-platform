@@ -9,6 +9,8 @@ variables:
     default: crypto
   eh_namespace:
     default: ehns-cryptothb7
+  storage_account:
+    default: stcryptothb7
   node_type:
     default: Standard_D4ds_v4 # DDSv4 family has 4 vCPUs of quota in eastasia
   spark_version:
