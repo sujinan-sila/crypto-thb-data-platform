@@ -32,3 +32,6 @@ logs/
 # terraform saved plans
 tfplan
 *.tfplan
+
+# databricks bundle local state
+.databricks/

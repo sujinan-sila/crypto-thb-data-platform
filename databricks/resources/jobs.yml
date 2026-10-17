@@ -1,0 +1,34 @@
+resources:
+  jobs:
+    stream_bronze_silver:
+      name: stream_bronze_silver
+      job_clusters:
+        - job_cluster_key: single_node
+          new_cluster:
+            spark_version: ${var.spark_version}
+            node_type_id: ${var.node_type}
+            num_workers: 0
+            runtime_engine: STANDARD # no Photon: about half the DBU price
+            data_security_mode: SINGLE_USER # "Dedicated"
+            single_user_name: ${workspace.current_user.userName}
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+      tasks:
+        - task_key: bronze_trades
+          job_cluster_key: single_node
+          notebook_task:
+            notebook_path: ../src/bronze_trades.py
+            base_parameters:
+              catalog: ${var.catalog}
+              eh_namespace: ${var.eh_namespace}
+        - task_key: silver_candles
+          depends_on:
+            - task_key: bronze_trades
+          job_cluster_key: single_node
+          notebook_task:
+            notebook_path: ../src/silver_candles.py
+            base_parameters:
+              catalog: ${var.catalog}

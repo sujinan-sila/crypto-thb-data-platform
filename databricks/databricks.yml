@@ -1,0 +1,22 @@
+bundle:
+  name: crypto_thb
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    default: crypto
+  eh_namespace:
+    default: ehns-cryptothb7
+  node_type:
+    default: Standard_D4ds_v4 # DDSv4 family has 4 vCPUs of quota in eastasia
+  spark_version:
+    default: "18.x-scala2.13" # same runtime as the dev cluster the notebooks were tested on
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-7405611334478618.18.azuredatabricks.net
