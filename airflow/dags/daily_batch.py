@@ -23,6 +23,8 @@ def daily_batch():
     ingest = AzureDataFactoryRunPipelineOperator(
         task_id="adf_ingest",
         pipeline_name="pl_ingest_daily",
+        resource_group_name="rg-cryptothb7",
+        factory_name="adf-cryptothb7",
         # Airflow 3: a cron run's logical date is the run time itself, so the
         # 00:30 run on the 15th has ds = 15th; the full day we want is the 14th
         parameters={"day": "{{ macros.ds_add(ds, -1) }}"},

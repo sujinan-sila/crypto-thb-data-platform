@@ -9,7 +9,9 @@ DBT_DIR = "/usr/local/airflow/dbt"
 
 dbt_gold = DbtDag(
     dag_id="dbt_gold",
-    project_config=ProjectConfig(DBT_DIR),
+    # dbt/target is shared with dbt runs on Windows; its partial-parse cache has
+    # Windows paths that the Linux container can't read, so always parse fresh
+    project_config=ProjectConfig(DBT_DIR, partial_parse=False),
     profile_config=ProfileConfig(
         profile_name="crypto_thb",
         target_name="dev",
