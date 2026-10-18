@@ -15,6 +15,9 @@ variables:
     default: Standard_D4ds_v4 # DDSv4 family has 4 vCPUs of quota in eastasia
   spark_version:
     default: "18.x-scala2.13" # same runtime as the dev cluster the notebooks were tested on
+  ci_service_principal:
+    description: Application ID of the github-ci service principal (set by CI)
+    default: ""
 
 targets:
   dev:
@@ -22,3 +25,16 @@ targets:
     default: true
     workspace:
       host: https://adb-7405611334478618.18.azuredatabricks.net
+
+  # Deployed only by GitHub Actions on merge to main. The jobs run as the CI
+  # service principal, so nothing in production depends on a personal account.
+  prod:
+    mode: production
+    workspace:
+      host: https://adb-7405611334478618.18.azuredatabricks.net
+      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.ci_service_principal}
+    permissions:
+      - user_name: sujinan.sil@dome.tu.ac.th
+        level: CAN_MANAGE
