@@ -1,0 +1,30 @@
+version: 2
+
+models:
+  - name: fct_candles_1m
+    description: One row per symbol per minute, built from the live trade stream.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [symbol, minute_start]
+      - dbt_utils.expression_is_true:
+          expression: "high >= greatest(open, close) and low <= least(open, close)"
+      - dbt_utils.expression_is_true:
+          expression: "trade_count > 0 and volume >= 0"
+    columns:
+      - name: symbol_key
+        tests:
+          - not_null
+          - relationships: {to: ref('dim_symbol'), field: symbol_key}
+
+  - name: dim_symbol
+    columns:
+      - name: symbol_key
+        tests: [unique, not_null]
+
+  - name: fct_fx_daily
+    columns:
+      - name: date_day
+        tests: [unique, not_null]
+      - name: usd_thb
+        tests:
+          - dbt_utils.accepted_range: {min_value: 20, max_value: 50}
