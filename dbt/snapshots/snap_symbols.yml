@@ -1,0 +1,8 @@
+snapshots:
+  - name: snap_symbols
+    relation: ref('stg_exchange_info')
+    config:
+      schema: silver
+      unique_key: symbol
+      strategy: check
+      check_cols: [status, tick_size, step_size, base_asset, quote_asset]
