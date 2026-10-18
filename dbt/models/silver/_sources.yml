@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: bronze
+    schema: bronze
+    tables:
+      - name: fx_usd_thb
+        config:
+          loaded_at_field: ingested_at
+          freshness:
+            warn_after: { count: 4, period: day } # long weekends and holidays    # long weekends and holidays
+      - name: th_bank_holidays
+      - name: exchange_info
+      - name: klines_1m
+
+  - name: silver
+    schema: silver
+    tables:
+      - name: candles_1m
+        description: Written by the Spark streaming job, not by dbt.
+        config:
+          loaded_at_field: processed_at
+          freshness:
+            warn_after: { count: 7, period: hour } # the stream job runs every 6 h
+            error_after: { count: 13, period: hour }

@@ -1,0 +1,19 @@
+name: crypto_thb
+version: "1.0.0"
+profile: crypto_thb
+
+model-paths: ["models"]
+snapshot-paths: ["snapshots"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+models:
+  crypto_thb:
+    silver:
+      +schema: silver
+      +materialized: view
+    gold:
+      +schema: gold
+      +materialized: table
+      # +grants:
+      #   select: ["analysts"]        # governance as code, see Part 09
