@@ -2,7 +2,7 @@
 
 Streaming and batch lakehouse for crypto market data, priced in Thai baht. Live trades from Binance go through Kafka (the Azure Event Hubs Kafka endpoint) into Databricks Structured Streaming and become 1-minute candles. Daily jobs in Azure Data Factory bring in the Bank of Thailand USD/THB rate and bank holidays, plus Binance reference data and official candles. Everything lands in a Bronze/Silver/Gold Delta lakehouse governed by Unity Catalog; dbt builds the Gold star schema, Airflow with Cosmos orchestrates the whole flow, and Power BI reads the result.
 
-> **Status: in progress.** Infrastructure, streaming, batch ingestion and the dbt Gold layer are running. Reconciliation, orchestration, CI/CD and Power BI are next; see [Progress](#progress).
+> **Status: in progress.** Infrastructure, streaming, batch ingestion, the dbt Gold layer, reconciliation and Unity Catalog grants are running. Orchestration, CI/CD and Power BI are next; see [Progress](#progress).
 
 ## Architecture
 
@@ -103,7 +103,46 @@ dbt-databricks runs against the dev cluster. `dbt build` passes: one snapshot, 1
 - Assumption: 1 USDT = 1 USD. USDT is a stablecoin that moves slightly around 1 USD, so THB prices carry that small error.
 - Found while building: the first daily ADF run for 17 Oct ran at 00:23 Bangkok time, when the UTC day still had 6.5 hours to go, so that day's official candles stop at 17:23 UTC. Daily jobs have to wait for the UTC day to close.
 
-## Planned data model (Gold)
+### Reconciliation: stream vs exchange
+
+`mart_stream_reconciliation` full-outer-joins every stream candle with Binance's official kline for the same minute and labels each minute; `mart_reconciliation_daily` turns that into a match rate per symbol and day, and a warn-level test fires below 99%.
+
+First comparison, 17 Oct, 1,140 stream candles (5 symbols, 13:44–17:31 UTC):
+
+| Status | Minutes | Cause |
+|---|---|---|
+| match | 1,086 | Open, high, low, close, volume and trade count all equal |
+| missing_in_exchange | 44 | Official klines end at 17:22–17:23 (the ADF run went before the UTC day closed) |
+| stream_has_fewer_trades | 5 | 13:44, the producer started mid-minute |
+| stream_has_more_trades | 5 | The last official kline of each symbol was still open when ADF fetched it |
+
+**Every minute that both sides covered in full matched exactly (1,086 of 1,086)**, with no duplicates and no price differences. All 54 mismatches sit at the edges of the two time ranges. The "more trades" rows looked like duplicates at first, but the exchange counts give the cause away: ADF fetched the symbols one after another (BTC, ETH, SOL, BNB, XRP), and the official trade count for that last minute rises in that order (34 of 713 for BTC, 277 of 302 for BNB), until XRP is fetched after the minute changed. The stream was right; the official candle wasn't finished yet.
+
+### Governance (`databricks/src/grants.sql`)
+
+- Account group `analysts` with SQL and dashboard access only (no workspace, cluster or admin rights), and `USE SCHEMA` + `SELECT` on `crypto.gold` only. `SHOW GRANTS` on bronze returns nothing.
+- dbt re-applies `SELECT` to `analysts` on every Gold model it builds (`+grants` in `dbt_project.yml`).
+- Tags (`layer`, `domain`, `consumer = power_bi`) and table comments. Unity Catalog records lineage from Bronze to the marts by itself:
+
+![Unity Catalog lineage](docs/images/uc_lineage_full.png)
+
+### Performance and cost (measured, East Asia prices)
+
+**Small files.** The stream writes 3 files per run, one per Event Hubs partition. Bronze had already been compacted once without anyone running it: `DESCRIBE HISTORY` shows an `OPTIMIZE` by a service principal 25 minutes after a stream run (9 files, 3.4 MB → 1 file), which is Databricks predictive optimization on Unity Catalog managed tables. A manual `OPTIMIZE` then took the 4 files left (one compacted, 3 from the next run) to 1 file of 7.8 MB for 835,894 trades. `optimizeWrite` and `autoCompact` are now on as well.
+
+**Liquid clustering** on `fct_candles_1m` is configured but not measured yet: at 1,140 rows the table is one file, so clustered and unclustered queries would both read one file. To be measured once there are days of data.
+
+**Cost of running the stream.** Job runs took 359 s and 447 s, and **141 s of each was cluster start-up** (32–39% of the run). One `Standard_D4ds_v4` job cluster costs $0.31/h (VM) + 0.75 DBU × $0.30 (Premium Jobs Compute) = $0.535/h, about $0.06 per run.
+
+| How the stream runs | Cluster hours/day | Data delay | Cost/day |
+|---|---|---|---|
+| Always-on cluster | 24 | ~2 min | ~$12.84 |
+| `availableNow` every hour | ~2.7 | ≤ 1 h | ~$1.44 |
+| `availableNow` every 6 h (chosen) | ~0.45 | ≤ 6 h | ~$0.24 |
+
+The hourly estimate is an upper bound: start-up time is fixed but smaller batches process faster. At 6-hourly runs, Event Hubs costs more than Databricks: 1 throughput unit is $0.03/h ($0.72/day) plus about $0.24/day of ingress events at ~8.6 million trades a day.
+
+## Data model (Gold)
 
 ```
                  dim_symbol (SCD Type 2)
@@ -116,7 +155,7 @@ dim_date ─────── fct_candles_1m ─────── fct_fx_daily
 
 ## Data quality plan
 
-- **Stream vs exchange reconciliation:** compare every candle built from the stream with Binance's official candle for the same minute, and explain the minutes that differ (disconnects, late events past the watermark, duplicates).
+- **Stream vs exchange reconciliation:** done, see above.
 - Freshness checks on the stream and the FX rate; dbt tests on every layer.
 - Failure experiments: pause Databricks for a day (expected: nothing lost, Event Hubs retains 3 days) and stop the producer for a few minutes (expected: a gap the checks catch).
 
@@ -128,7 +167,7 @@ dim_date ─────── fct_candles_1m ─────── fct_fx_daily
 - [x] Streaming: Bronze and Silver candles
 - [x] ADF ingestion and Auto Loader
 - [x] dbt Gold: star schema, SCD2, tests
-- [ ] Reconciliation, governance, cost measurements
+- [x] Reconciliation, governance, cost measurements (liquid clustering still to measure)
 - [ ] Airflow + Cosmos orchestration
 - [ ] CI/CD with GitHub Actions and Asset Bundles
 - [ ] Power BI report
