@@ -160,6 +160,8 @@ Astro project (Airflow 3) with three DAGs:
 - **`stream_runs`** every 6 hours: the `stream_bronze_silver` job (`availableNow`), `max_active_runs=1` so two runs never share a checkpoint.
 - **`dbt_gold`** (Cosmos): scheduled on the Asset, not on a clock, so it starts only when the batch data has actually landed. Cosmos turns each dbt model, snapshot and its tests into separate tasks (17 here), so a failure shows the exact model and can be retried alone.
 
+![dbt_gold DAG rendered by Cosmos](docs/images/cosmos_dbt_gold.png)
+
 First end-to-end run: ADF ✓ → Auto Loader ✓ → `dbt_gold` started by itself 3 seconds after the asset update and passed all 17 tasks in 8 minutes.
 
 Things that only showed up when running it:
