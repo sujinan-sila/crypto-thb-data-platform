@@ -1,0 +1,73 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+  DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+  DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+  BUNDLE_VAR_ci_service_principal: ${{ secrets.DATABRICKS_CLIENT_ID }}
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.8.4 pytest==8.3.4 -r producer/requirements.txt
+      - run: ruff check producer airflow/dags airflow/include
+      - run: pytest producer
+
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      dbt: ${{ steps.filter.outputs.dbt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            dbt:
+              - 'dbt/**'
+              - '.github/workflows/ci.yml'
+
+  dbt:
+    needs: [lint-and-test, changes]
+    # Only when dbt/ changed: each run wakes a SQL warehouse, which costs credit
+    if: github.event_name == 'pull_request' && needs.changes.outputs.dbt == 'true'
+    runs-on: ubuntu-latest
+    env:
+      # Serverless SQL warehouse: starts in seconds and uses no VM quota
+      DATABRICKS_HTTP_PATH: ${{ secrets.DATABRICKS_HTTP_PATH }}
+      DBT_PROFILES_DIR: .
+    defaults:
+      run:
+        working-directory: dbt
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install dbt-databricks==1.12.7
+      - run: dbt deps
+      # Builds into ci_silver / ci_gold (see macros/generate_schema_name.sql)
+      - run: dbt build --target ci
+
+  bundle:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: databricks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: databricks/setup-cli@main
+      - run: databricks bundle validate -t prod
+      - if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: databricks bundle deploy -t prod
