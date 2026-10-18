@@ -1,8 +1,17 @@
 # Crypto Market Lakehouse (in THB) on Azure Databricks
 
-Streaming and batch lakehouse for crypto market data, priced in Thai baht. Live trades from Binance go through Kafka (the Azure Event Hubs Kafka endpoint) into Databricks Structured Streaming and become 1-minute candles. Daily jobs in Azure Data Factory bring in the Bank of Thailand USD/THB rate and bank holidays, plus Binance reference data and official candles. Everything lands in a Bronze/Silver/Gold Delta lakehouse governed by Unity Catalog; dbt builds the Gold star schema, Airflow with Cosmos orchestrates the whole flow, and Power BI reads the result.
+Streaming and batch lakehouse for crypto market data, priced in Thai baht. Live trades from Binance go through Kafka (the Azure Event Hubs Kafka endpoint) into Databricks Structured Streaming and become 1-minute candles. Daily jobs in Azure Data Factory bring in the Bank of Thailand USD/THB rate and bank holidays, plus Binance reference data and official candles. Everything lands in a Bronze/Silver/Gold Delta lakehouse governed by Unity Catalog; dbt builds the Gold star schema, Airflow with Cosmos orchestrates the whole flow, and GitHub Actions tests and deploys it.
 
-> **Status: in progress.** Infrastructure, streaming, batch ingestion, the dbt Gold layer, reconciliation, Unity Catalog grants, Airflow orchestration and CI/CD are running. Power BI is next; see [Progress](#progress).
+> **Status (19 Oct 2026):** the pipeline runs end to end, from the Binance stream and the Bank of Thailand API to Gold tables in baht, scheduled by Airflow and deployed by CI. Still to do: the Power BI report (Gold is ready for it) and measuring liquid clustering once there are weeks of data. The Azure resources are destroyed before the student credit ends on 17 Dec 2026, so this README keeps the results and screenshots.
+
+## Highlights
+
+- **Accuracy checked against the exchange, minute by minute.** Every stream candle is compared with Binance's official kline: all 1,135 minutes the stream covered in full matched exactly (OHLC, volume, trade count). Every mismatch traced to a cause, including official candles that were still open when they were fetched.
+- **Latency measured:** Binance trade → Event Hubs median 141 ms, p99 364 ms.
+- **Holiday-aware THB pricing:** the BOT rate exists only on Thai business days; Gold carries the last published rate over weekends and bank holidays and marks which days are real.
+- **Data-aware orchestration:** dbt starts when the batch data has landed (Airflow Assets), not at a guessed time.
+- **Cost tuned with measured numbers:** `availableNow` every 6 hours costs about $0.24/day against about $12.84/day for an always-on cluster, and a third of each run is cluster start-up.
+- **Governed and deployed like production:** analysts read Gold only, production jobs run as a service principal, and changes reach Databricks only through a pull request with passing checks.
 
 ## Architecture
 
@@ -18,7 +27,7 @@ flowchart LR
         B["Bronze"] --> S["Silver<br/>1-min candles, parsed reference data"]
         S -->|dbt| G["Gold<br/>star schema, THB marts"]
     end
-    G --> PBI["Power BI"]
+    G -.-> PBI["Power BI<br/>(planned)"]
     AF["Airflow + Cosmos"] -.-> ADF
     AF -.-> DBX
 ```
@@ -55,7 +64,7 @@ Built on an Azure for Students subscription, which limits what can be created:
 - The Databricks `trial` SKU is refused on this subscription type, so the workspace is `premium` (also needed for Unity Catalog) and DBUs are paid from credit from the first hour.
 - Credit ends on 17 Dec 2026; everything is created with Terraform so it can be destroyed and rebuilt.
 
-## What's built so far
+## How it's built
 
 ### Infrastructure (`terraform/`)
 
@@ -90,7 +99,7 @@ Data Factory isn't Git-linked, so the JSON in `adf/` is exported from the publis
 
 ### dbt: Silver staging and Gold (`dbt/`)
 
-dbt-databricks runs against the dev cluster. `dbt build` passes: one snapshot, 10 models, tests on every Gold table.
+dbt-databricks runs against the dev cluster locally, a serverless SQL warehouse in CI, and through Cosmos in Airflow. `dbt build` passes: one snapshot, 12 models, tests on every Gold table.
 
 ![dbt lineage](docs/images/dbt_lineage.png)
 
@@ -198,11 +207,28 @@ dim_date ─────── fct_candles_1m ─────── fct_fx_daily
  holidays)        OHLC, volume, trades   over weekends and holidays
 ```
 
-## Data quality plan
+## Data quality
 
-- **Stream vs exchange reconciliation:** done, see above.
-- Freshness checks on the stream and the FX rate; dbt tests on every layer.
-- Failure experiments: pause Databricks for a day (expected: nothing lost, Event Hubs retains 3 days) and stop the producer for a few minutes (expected: a gap the checks catch).
+- **Stream vs exchange reconciliation** per minute, with a warn-level test below 99% a day (see above).
+- **Freshness** on the stream and the FX rate; dbt tests on every Gold table (uniqueness, OHLC sanity, relationships, USD/THB range 20–50).
+- **Failure experiments, both run:**
+  - Producer stopped overnight: the reconciliation shows exactly that window as `missing_in_stream`, and freshness went to ERROR on the stream table.
+  - No stream job for about 22 hours while the producer kept writing for the last 2.5 of them: Event Hubs held the trades (3-day retention) and the next run loaded them all from the checkpoint.
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| `terraform/` | All Azure resources; `create_eventhubs` / `create_databricks` flags |
+| `producer/`, `docker-compose.yml` | Binance → Kafka / Event Hubs producer and its tests; local Kafka for development |
+| `adf/` | Data Factory pipelines, datasets and linked services (exported JSON) |
+| `databricks/` | Asset Bundle: streaming and Auto Loader jobs, `dev` and `prod` targets, Unity Catalog setup and grants |
+| `dbt/` | Silver staging, SCD2 snapshot, Gold star schema, marts, reconciliation, tests |
+| `airflow/` | Astro project: DAGs, Databricks pool, dbt via Cosmos |
+| `.github/workflows/` | CI: lint, tests, dbt build into `ci_*` schemas, bundle validate and deploy |
+| `docs/images/` | Screenshots used in this README |
+
+Secrets never live in the repo: the producer reads `.env`, Airflow reads `airflow/.env` (both git-ignored, with `.env.example` files), Data Factory reads Key Vault, Databricks reads its secret scope, and CI reads GitHub secrets.
 
 ## Progress
 
@@ -215,8 +241,10 @@ dim_date ─────── fct_candles_1m ─────── fct_fx_daily
 - [x] Reconciliation, governance, cost measurements (liquid clustering still to measure)
 - [x] Airflow + Cosmos orchestration
 - [x] CI/CD with GitHub Actions and Asset Bundles
-- [ ] Power BI report
+- [ ] Power BI report on `crypto.gold`
+- [ ] Measure liquid clustering on weeks of data
+- [ ] `terraform destroy` before the credit ends (17 Dec 2026)
 
 ## Stack
 
-Azure (ADLS Gen2, Event Hubs, Data Factory, Key Vault) · Azure Databricks (Spark Structured Streaming, Delta Lake, Auto Loader, Unity Catalog, Asset Bundles) · Apache Kafka protocol · dbt · Apache Airflow + Cosmos · Terraform · GitHub Actions · Power BI · Python · SQL
+Azure (ADLS Gen2, Event Hubs, Data Factory, Key Vault) · Azure Databricks (Spark Structured Streaming, Delta Lake, Auto Loader, Unity Catalog, Asset Bundles) · Apache Kafka protocol · dbt · Apache Airflow + Cosmos · Terraform · GitHub Actions · Python · SQL
