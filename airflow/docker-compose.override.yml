@@ -1,0 +1,8 @@
+x-dbt: &dbt
+  volumes:
+    - ../dbt:/usr/local/airflow/dbt
+services:
+  scheduler: *dbt
+  dag-processor: *dbt
+  triggerer: *dbt
+  api-server: *dbt
