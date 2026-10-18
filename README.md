@@ -2,7 +2,7 @@
 
 Streaming and batch lakehouse for crypto market data, priced in Thai baht. Live trades from Binance go through Kafka (the Azure Event Hubs Kafka endpoint) into Databricks Structured Streaming and become 1-minute candles. Daily jobs in Azure Data Factory bring in the Bank of Thailand USD/THB rate and bank holidays, plus Binance reference data and official candles. Everything lands in a Bronze/Silver/Gold Delta lakehouse governed by Unity Catalog; dbt builds the Gold star schema, Airflow with Cosmos orchestrates the whole flow, and Power BI reads the result.
 
-> **Status: in progress.** Infrastructure, streaming, batch ingestion, the dbt Gold layer, reconciliation, Unity Catalog grants and Airflow orchestration are running. CI/CD and Power BI are next; see [Progress](#progress).
+> **Status: in progress.** Infrastructure, streaming, batch ingestion, the dbt Gold layer, reconciliation, Unity Catalog grants, Airflow orchestration and CI/CD are running. Power BI is next; see [Progress](#progress).
 
 ## Architecture
 
@@ -170,6 +170,23 @@ Things that only showed up when running it:
 - Auto Loader ignores a file rewritten under the same name unless `cloudFiles.allowOverwrites` is on, so the complete re-fetch of 17 Oct would never have reached Bronze. Turned on; `stg_klines` keeps the newest copy of each file.
 - The Databricks provider rejects `databricks://` asset URIs without a workspace host; the ADF operator in this provider version needs the factory and resource group on the task; and dbt's partial-parse cache written on Windows can't be read in the Linux container, so Cosmos parses fresh.
 
+### CI/CD: GitHub Actions + Asset Bundles (`.github/workflows/ci.yml`)
+
+Changes go through a branch and a pull request; `main` requires the checks to pass.
+
+| Job | What | When |
+|---|---|---|
+| `lint-and-test` | ruff, pytest for the producer (no cloud access) | Every PR and push |
+| `dbt` | `dbt build --target ci` into `ci_silver` / `ci_gold`: reads the real Bronze and Silver, never writes the real tables | PRs that touch `dbt/` or the workflow |
+| `bundle` | `databricks bundle validate -t prod`; on merge to `main`, `deploy -t prod` | Every PR / push to `main` |
+
+- CI signs in as a Databricks-managed service principal (`github-ci`, OAuth client credentials), so it doesn't depend on the university's Entra ID. Its grants are in `databricks/src/ci_grants.sql`: read Bronze and Silver, own the `ci_*` schemas, and write what the prod jobs write; nothing on Gold.
+- The **`prod` bundle target** lives under `/Workspace/Shared` and its jobs run as `github-ci`, so production doesn't depend on a personal account. The `dev` target stays for personal development (`[dev …]` jobs).
+- dbt in CI runs on a serverless SQL warehouse (2X-Small, auto-stop after 1 minute) instead of the dev cluster: the dev cluster is dedicated to one user, the warehouse uses no VM quota, and the whole build took 63 seconds (24 nodes: 23 pass, 1 warn).
+- First run failed with a 404 on `OpenSession`: the warehouse path secret started with `/`, so the URL had `//sql/...`.
+
+![CI checks on the first pull request](docs/images/ci_checks_pr1.png)
+
 ## Data model (Gold)
 
 ```
@@ -197,7 +214,7 @@ dim_date ─────── fct_candles_1m ─────── fct_fx_daily
 - [x] dbt Gold: star schema, SCD2, tests
 - [x] Reconciliation, governance, cost measurements (liquid clustering still to measure)
 - [x] Airflow + Cosmos orchestration
-- [ ] CI/CD with GitHub Actions and Asset Bundles
+- [x] CI/CD with GitHub Actions and Asset Bundles
 - [ ] Power BI report
 
 ## Stack
