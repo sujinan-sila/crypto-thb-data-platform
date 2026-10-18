@@ -19,6 +19,9 @@ for source in SOURCES:
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "text")
         .option("wholetext", "true")  # one row per file: the API response as received
+        # ADF re-running a day rewrites the same file names; load the new copy too
+        # (dbt keeps the newest row per file)
+        .option("cloudFiles.allowOverwrites", "true")
         .load(f"{landing}/{source}/")
         .select(
             F.col("value").alias("payload"),
