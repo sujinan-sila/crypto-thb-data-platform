@@ -2,7 +2,7 @@
 
 Streaming and batch lakehouse for crypto market data, priced in Thai baht. Live trades from Binance go through Kafka (the Azure Event Hubs Kafka endpoint) into Databricks Structured Streaming and become 1-minute candles. Daily jobs in Azure Data Factory bring in the Bank of Thailand USD/THB rate and bank holidays, plus Binance reference data and official candles. Everything lands in a Bronze/Silver/Gold Delta lakehouse governed by Unity Catalog; dbt builds the Gold star schema, Airflow with Cosmos orchestrates the whole flow, and Power BI reads the result.
 
-> **Status: in progress.** Infrastructure, streaming, batch ingestion, the dbt Gold layer, reconciliation and Unity Catalog grants are running. Orchestration, CI/CD and Power BI are next; see [Progress](#progress).
+> **Status: in progress.** Infrastructure, streaming, batch ingestion, the dbt Gold layer, reconciliation, Unity Catalog grants and Airflow orchestration are running. CI/CD and Power BI are next; see [Progress](#progress).
 
 ## Architecture
 
@@ -118,6 +118,16 @@ First comparison, 17 Oct, 1,140 stream candles (5 symbols, 13:44–17:31 UTC):
 
 **Every minute that both sides covered in full matched exactly (1,086 of 1,086)**, with no duplicates and no price differences. All 54 mismatches sit at the edges of the two time ranges. The "more trades" rows looked like duplicates at first, but the exchange counts give the cause away: ADF fetched the symbols one after another (BTC, ETH, SOL, BNB, XRP), and the official trade count for that last minute rises in that order (34 of 713 for BTC, 277 of 302 for BNB), until XRP is fetched after the minute changed. The stream was right; the official candle wasn't finished yet.
 
+After Airflow re-fetched 17 Oct as a complete day (00:30 UTC schedule, see below), the comparison confirmed it: the `stream_has_more_trades` rows went to 0, and **all 1,135 full minutes the stream covered on 17 Oct matched** (13:45–17:31 for every symbol). The rest of the table is now about real events:
+
+| Status | Minutes | Cause |
+|---|---|---|
+| missing_in_stream | 1,935 | 17 Oct 17:33 → 23:59, the producer was stopped overnight on purpose (the "stop the producer" experiment) |
+| missing_in_exchange | 715 | 18 Oct stream candles; that day's official klines are fetched the next morning |
+| stream_has_fewer_trades | 10 | The minute the producer started (13:44) and the minute it was stopped (17:32) |
+
+So the daily match rate for 17 Oct reads 36.9%, and the warn-level test flags it, but every lost minute lines up with the producer being off. Nothing was lost or changed inside the pipeline.
+
 ### Governance (`databricks/src/grants.sql`)
 
 - Account group `analysts` with SQL and dashboard access only (no workspace, cluster or admin rights), and `USE SCHEMA` + `SELECT` on `crypto.gold` only. `SHOW GRANTS` on bronze returns nothing.
@@ -141,6 +151,22 @@ First comparison, 17 Oct, 1,140 stream candles (5 symbols, 13:44–17:31 UTC):
 | `availableNow` every 6 h (chosen) | ~0.45 | ≤ 6 h | ~$0.24 |
 
 The hourly estimate is an upper bound: start-up time is fixed but smaller batches process faster. At 6-hourly runs, Event Hubs costs more than Databricks: 1 throughput unit is $0.03/h ($0.72/day) plus about $0.24/day of ingress events at ~8.6 million trades a day.
+
+### Orchestration: Airflow + Cosmos (`airflow/`)
+
+Astro project (Airflow 3) with three DAGs:
+
+- **`daily_batch`** at 00:30 UTC: triggers the ADF pipeline for the previous UTC day (a closed day, which fixes the partial-day problem above), then the `landing_to_bronze` Databricks job. The job task publishes the Asset `bronze/batch_sources`.
+- **`stream_runs`** every 6 hours: the `stream_bronze_silver` job (`availableNow`), `max_active_runs=1` so two runs never share a checkpoint.
+- **`dbt_gold`** (Cosmos): scheduled on the Asset, not on a clock, so it starts only when the batch data has actually landed. Cosmos turns each dbt model, snapshot and its tests into separate tasks (17 here), so a failure shows the exact model and can be retried alone.
+
+First end-to-end run: ADF ✓ → Auto Loader ✓ → `dbt_gold` started by itself 3 seconds after the asset update and passed all 17 tasks in 8 minutes.
+
+Things that only showed up when running it:
+
+- Unpausing the DAGs created a scheduled run of `daily_batch` and `stream_runs` at the same moment. Two 4-vCPU job clusters don't fit in the 6-vCPU quota; one failed to start and succeeded on retry. Both Databricks tasks now share an Airflow pool with one slot (`airflow_settings.yaml`), so they queue instead of colliding. dbt uses the dev cluster, which still idles 15 minutes after a run; the schedule keeps it clear of the jobs, and retries cover the rest.
+- Auto Loader ignores a file rewritten under the same name unless `cloudFiles.allowOverwrites` is on, so the complete re-fetch of 17 Oct would never have reached Bronze. Turned on; `stg_klines` keeps the newest copy of each file.
+- The Databricks provider rejects `databricks://` asset URIs without a workspace host; the ADF operator in this provider version needs the factory and resource group on the task; and dbt's partial-parse cache written on Windows can't be read in the Linux container, so Cosmos parses fresh.
 
 ## Data model (Gold)
 
@@ -168,7 +194,7 @@ dim_date ─────── fct_candles_1m ─────── fct_fx_daily
 - [x] ADF ingestion and Auto Loader
 - [x] dbt Gold: star schema, SCD2, tests
 - [x] Reconciliation, governance, cost measurements (liquid clustering still to measure)
-- [ ] Airflow + Cosmos orchestration
+- [x] Airflow + Cosmos orchestration
 - [ ] CI/CD with GitHub Actions and Asset Bundles
 - [ ] Power BI report
 
