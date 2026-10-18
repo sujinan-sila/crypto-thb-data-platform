@@ -2,7 +2,7 @@
 
 Streaming and batch lakehouse for crypto market data, priced in Thai baht. Live trades from Binance go through Kafka (the Azure Event Hubs Kafka endpoint) into Databricks Structured Streaming and become 1-minute candles. Daily jobs in Azure Data Factory bring in the Bank of Thailand USD/THB rate and bank holidays, plus Binance reference data and official candles. Everything lands in a Bronze/Silver/Gold Delta lakehouse governed by Unity Catalog; dbt builds the Gold star schema, Airflow with Cosmos orchestrates the whole flow, and Power BI reads the result.
 
-> **Status: in progress.** Infrastructure, streaming (Bronze and Silver) and batch ingestion into Bronze are running. dbt Gold, orchestration, CI/CD and Power BI are next; see [Progress](#progress).
+> **Status: in progress.** Infrastructure, streaming, batch ingestion and the dbt Gold layer are running. Reconciliation, orchestration, CI/CD and Power BI are next; see [Progress](#progress).
 
 ## Architecture
 
@@ -88,6 +88,21 @@ Auto Loader (`landing_to_bronze` job) loads each new file as one row (`payload`,
 
 Data Factory isn't Git-linked, so the JSON in `adf/` is exported from the published factory.
 
+### dbt: Silver staging and Gold (`dbt/`)
+
+dbt-databricks runs against the dev cluster. `dbt build` passes: one snapshot, 10 models, tests on every Gold table.
+
+![dbt lineage](docs/images/dbt_lineage.png)
+
+- **Sources and freshness:** the stream table errors after 13 hours without new candles, the FX rate warns after 4 days (long holiday weekends). It caught the stream being paused overnight.
+- **Silver staging views** parse the raw JSON with `payload:field`, `from_json` and `explode`, and keep only the newest copy of each file or date (the FX request looks back 7 days, so every date arrives several times).
+- **SCD Type 2 snapshot** of each symbol's trading rules (`strategy: check`, since exchangeInfo has no updated-at field). `dim_symbol` starts the first version in 1970 so candles from before the first snapshot still join.
+- **`fct_fx_daily`** has a rate for every calendar day: weekends and Thai bank holidays carry the last published rate forward, and `is_published` says which days are real. In the data so far, 13 Oct (holiday) uses 12 Oct's rate and 16–18 Oct use 15 Oct's.
+- **`fct_candles_1m`** is incremental with merge on `(symbol, minute_start)`, filtered by `processed_at` rather than `minute_start`: the watermark holds back the last minute of every stream run, so that candle arrives in the next run with an older timestamp and a `minute_start` filter would drop it. Each candle joins the symbol version that was valid at that minute.
+- **Marts:** daily prices in THB by Thai date (a stream run from 20:44 to 00:31 Bangkok time splits into two days), VWAP, and rolling 60-minute volatility.
+- Assumption: 1 USDT = 1 USD. USDT is a stablecoin that moves slightly around 1 USD, so THB prices carry that small error.
+- Found while building: the first daily ADF run for 17 Oct ran at 00:23 Bangkok time, when the UTC day still had 6.5 hours to go, so that day's official candles stop at 17:23 UTC. Daily jobs have to wait for the UTC day to close.
+
 ## Planned data model (Gold)
 
 ```
@@ -112,7 +127,7 @@ dim_date ─────── fct_candles_1m ─────── fct_fx_daily
 - [x] Unity Catalog: medallion schemas, external locations
 - [x] Streaming: Bronze and Silver candles
 - [x] ADF ingestion and Auto Loader
-- [ ] dbt Gold: star schema, SCD2, tests
+- [x] dbt Gold: star schema, SCD2, tests
 - [ ] Reconciliation, governance, cost measurements
 - [ ] Airflow + Cosmos orchestration
 - [ ] CI/CD with GitHub Actions and Asset Bundles
