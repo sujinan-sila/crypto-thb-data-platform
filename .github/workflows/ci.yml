@@ -35,6 +35,7 @@ jobs:
           filters: |
             dbt:
               - 'dbt/**'
+              - '.github/workflows/ci.yml'
 
   dbt:
     needs: [lint-and-test, changes]
