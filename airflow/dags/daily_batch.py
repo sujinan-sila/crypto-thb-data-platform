@@ -34,6 +34,7 @@ def daily_batch():
         task_id="landing_to_bronze",
         job_id="{{ var.value.job_landing_to_bronze }}",
         outlets=[BRONZE_BATCH],
+        pool="databricks_compute",   # one job cluster at a time, see airflow_settings.yaml
     )
     ingest >> to_bronze
 

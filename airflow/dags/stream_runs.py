@@ -21,6 +21,7 @@ def stream_runs():
         task_id="stream_bronze_silver",
         job_id="{{ var.value.job_stream_bronze_silver }}",
         outlets=[SILVER_CANDLES],
+        pool="databricks_compute",   # one job cluster at a time, see airflow_settings.yaml
     )
 
 

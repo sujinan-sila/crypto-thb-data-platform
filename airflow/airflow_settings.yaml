@@ -1,0 +1,6 @@
+# Loaded by `astro dev start`. Pools only: connections and variables come from .env.
+airflow:
+  pools:
+    - pool_name: databricks_compute
+      pool_slot: 1
+      pool_description: One Databricks job cluster at a time (6 vCPU regional quota, 4 per cluster)
